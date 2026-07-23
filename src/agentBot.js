@@ -16,7 +16,7 @@ const db = require('./db');
 
 const AGENT_BOT_TOKEN = process.env.AGENT_BOT_TOKEN;
 const ADMIN_BOT_TOKEN = process.env.ADMIN_BOT_TOKEN;
-const BINGO_BOT_USERNAME = process.env.BINGO_BOT_USERNAME || 'SmartBingoBot';
+const BINGO_BOT_USERNAME = process.env.BINGO_BOT_USERNAME || 'SmartBingo12Bot';
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
 const SUPPORT_USERNAME = '@Smartbingosupport';
 const WEBAPP_URL = process.env.WEBAPP_URL || process.env.FRONTEND_URL || 'http://localhost:5173';

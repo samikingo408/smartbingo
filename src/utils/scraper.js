@@ -76,10 +76,11 @@ async function extractText(response) {
  */
 function normalizePhone(phone) {
     if (!phone) return '';
-    phone = phone.toString().replace(/[\s\-]/g, '');
-    if (phone.startsWith('+2519')) return '0' + phone.slice(4);
-    if (phone.startsWith('2519')) return '0' + phone.slice(3);
-    return phone;
+    let p = phone.toString().replace(/[\s\+\-]/g, '');
+    if (p.startsWith('2519')) return '0' + p.slice(3);
+    if (p.startsWith('2517')) return '0' + p.slice(3);
+    if (p.length === 9 && (p.startsWith('9') || p.startsWith('7'))) return '0' + p;
+    return p;
 }
 
 /**
@@ -89,7 +90,7 @@ function normalizePhone(phone) {
 function maskedAccountMatches(masked, known) {
     if (!masked || !known) return false;
 
-    const cleanMasked = masked.replace(/[\s\+\-]/g, '');
+    const cleanMasked = normalizePhone(masked).replace(/[\s\+\-]/g, '');
     const cleanKnown = normalizePhone(known).replace(/[\s\+\-]/g, '');
 
     if (cleanMasked === cleanKnown) return true;
@@ -302,64 +303,93 @@ async function verifyTelebirr(receiptUrl, myAccountNumber, expectedName) {
 }
 
 /**
- * Scrape a CBEBirr receipt page using the direct URL from the SMS.
+ * Scrape a CBEBirr receipt PDF directly from cbepay1.cbe.com.et.
+ * PDF format confirmed: "Credit Account{phone} - {name}" and date like "2026-07-18 13:26" in text.
  */
 async function verifyCBEBirr(receiptUrl, myAccountNumber, expectedName) {
     try {
-        console.log(`[Scraper:CBEBirr] Fetching: ${receiptUrl}`);
-        let response = await fetchUrl(receiptUrl);
+        console.log(`[Scraper:CBEBirr] Fetching PDF: ${receiptUrl}`);
+        const response = await fetchUrl(receiptUrl);
+        if (!response) return { ok: false, error: 'CBEBirr receipt page is unreachable or timed out' };
 
-        // Fallback: cbepay1.cbe.com.et may be blocked — try CBE standard receipt URL instead
-        // CBEBirr is a CBE product; TX IDs often appear in CBE's standard receipt system too
-        if (!response) {
-            const txIdMatch = receiptUrl.match(/TID=([A-Z0-9]+)/i);
-            if (txIdMatch) {
-                console.log(`[Scraper:CBEBirr] Direct URL failed — trying CBE standard receipt for TX: ${txIdMatch[1]}`);
-                return await verifyCBE(`https://apps.cbe.com.et:100/?id=${txIdMatch[1]}`, myAccountNumber, expectedName);
+        const contentType = response.headers['content-type'] || '';
+        let pageText = '';
+
+        if (contentType.includes('application/pdf')) {
+            try {
+                const pdfData = await pdfParse(response.data);
+                pageText = pdfData.text.replace(/\s+/g, ' ').trim();
+            } catch (e) {
+                console.log(`[Scraper:CBEBirr] PDF parse error: ${e.message}`);
+                return { ok: false, error: 'Failed to parse CBEBirr PDF receipt' };
             }
-            return { ok: false, error: 'CBEBirr receipt page is unreachable or timed out' };
+        } else {
+            pageText = response.data.toString().replace(/\s+/g, ' ').trim();
         }
-
-        const pageText = await extractText(response);
 
         console.log(`\n[Scraper:CBEBirr] ══════════ FULL PAGE TEXT ══════════`);
-        console.log(pageText);
+        console.log(pageText.slice(0, 1500));
         console.log(`[Scraper:CBEBirr] ════════════════════════════════════\n`);
 
-        // ── Amount ──
-        const amountMatch = pageText.match(/([\d,]+\.[\d]{2})\s*Paid\s*amount/i)
-            || pageText.match(/([0-9,]+\.[0-9]{2})\s*(?:ETB|Birr|Br)/i);
-        const amount = amountMatch ? parseFloat(amountMatch[1].replace(/,/g, '')) : 0;
-        if (amount <= 0) return { ok: false, error: 'Amount not found on receipt' };
-
-        // ── Receiver Account ──
-        const receiverAccMatch = pageText.match(/Credit\s*Account\s*(\d{7,16})/i);
-        const receiverAcc = receiverAccMatch ? receiverAccMatch[1] : '';
-        if (!receiverAcc || !maskedAccountMatches(receiverAcc, myAccountNumber)) {
-            return { ok: false, error: `Account mismatch: receipt shows "${receiverAcc || 'nothing found'}"` };
+        if (!pageText || pageText.length < 50) {
+            return { ok: false, error: 'CBEBirr receipt returned empty content' };
         }
 
-        // ── Receiver Name ──
-        const nameMatch = pageText.match(/Credit\s*Account\s*\d+\s*-\s*([A-Za-z\s]{3,60}?)(?:\s*Receiver|\s*Order|\s*Debit|$)/i);
-        const receiverName = nameMatch ? nameMatch[1].trim() : '';
-        if (!receiverName) return { ok: false, error: 'Receiver name could not be found' };
+        // ── Check transaction not failed ──
+        if (/transaction\s*status\s*(?:is\s*)?(?:failed|cancelled|rejected|invalid|error)/i.test(pageText)) {
+            return { ok: false, error: 'CBEBirr transaction is not completed' };
+        }
 
-        // ── Date ──
-        const dateMatch = pageText.match(/(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?)/);
-        const txDate = dateMatch ? parseTransactionDate(dateMatch[1]) : null;
-        if (!txDate) return { ok: false, error: 'Transaction date could not be found' };
+        // ── Receiver Account + Name ──
+        // PDF: "Credit Account251940072277 - Yonatan Desalegn Hagos Receiver Name251940072277 - Yonatan..."
+        const creditMatch =
+            pageText.match(/Credit\s*Account\s*([\d]+)\s*-\s*([A-Za-z][A-Za-z\s\/\.]{2,60}?)(?=\s*(?:Receiver|Order|Debit|$))/i) ||
+            pageText.match(/Receiver\s*Name\s*([\d]+)\s*-\s*([A-Za-z][A-Za-z\s\/\.]{2,60}?)(?=\s*(?:Order|Debit|$))/i);
 
-        console.log(`[Scraper:CBEBirr] Amount: ${amount}, Name: "${receiverName}", Acc: "${receiverAcc}", Date: ${txDate}`);
+        if (!creditMatch) {
+            return { ok: false, error: 'Receiver account not found in CBEBirr receipt' };
+        }
+        const receiverAcc = creditMatch[1].trim();
+        const receiverName = creditMatch[2].trim();
 
+        // ── Account match ──
+        if (!maskedAccountMatches(receiverAcc, myAccountNumber)) {
+            return { ok: false, error: `Account mismatch: receipt shows "${receiverAcc}" but expected "${myAccountNumber}"` };
+        }
+
+        // ── Name match ──
         if (expectedName && receiverName) {
             const cleanExpected = expectedName.toLowerCase().replace(/\s+/g, '');
             const cleanFound = receiverName.toLowerCase().replace(/\s+/g, '');
             if (!cleanFound.includes(cleanExpected) && !cleanExpected.split(/\s+/).every(part => cleanFound.includes(part.toLowerCase()))) {
-                return { ok: false, error: `Name mismatch: receipt shows "${receiverName}"` };
+                return { ok: false, error: `Name mismatch: receipt shows "${receiverName}" but expected "${expectedName}"` };
             }
         }
 
-        return { ok: true, amount, receiver: receiverAcc, txDate };
+        // ── Amount ──
+        // PDF has: "DGI01ITM9C42026-07-18 13:2650.00 50.00 0.00 0.00 50.00 Paid amount"
+        // Sometimes pdf-parse merges the time and amount (e.g. 09:4810.00). We inject a space after the time:
+        pageText = pageText.replace(/(\d{4}-\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2})(?=\d)/g, '$1 ');
+
+        // First decimal before "Paid amount" sequence is the paid amount
+        const amountMatch =
+            pageText.match(/([\d,]+\.\d{2})\s+(?:[\d,]+\.\d{2}\s+){0,4}Paid\s*[Aa]mount/i) ||
+            pageText.match(/([\d,]+\.\d{2})\s*Paid\s*[Aa]mount/i) ||
+            pageText.match(/Amount\s+([\d,]+\.\d{2})/i);
+        const amount = amountMatch ? parseFloat(amountMatch[1].replace(/,/g, '')) : 0;
+        if (amount <= 0) return { ok: false, error: 'Amount not found in CBEBirr receipt' };
+
+        // ── Date ──
+        // PDF has date embedded: "2026-07-18 13:26" (YYYY-MM-DD HH:MM) somewhere in the text
+        const dateMatch =
+            pageText.match(/(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?)/) ||
+            pageText.match(/Transaction\s*Date\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?)/i);
+        const txDate = dateMatch ? parseTransactionDate(dateMatch[1]) : null;
+        if (!txDate) return { ok: false, error: 'Transaction date not found in CBEBirr receipt' };
+
+        console.log(`[Scraper:CBEBirr] ✅ Amount: ${amount} ETB | Receiver: "${receiverName}" (${receiverAcc}) | Date: ${txDate}`);
+        return { ok: true, amount, receiver: receiverAcc, receiverName, txDate };
+
     } catch (error) {
         console.error(`[Scraper:CBEBirr] Error:`, error.message);
         return { ok: false, error: 'CBEBirr receipt page is unreachable or invalid' };
@@ -367,71 +397,205 @@ async function verifyCBEBirr(receiptUrl, myAccountNumber, expectedName) {
 }
 
 /**
- * Scrape a CBE receipt page.
- * Tries port 100 first, falls back to standard HTTPS (port 443) if blocked.
+ * Parse a CBE transfer from the SMS text.
+ * The new CBE mobile receipt page (mbreciept.cbe.com.et) is a JS-only SPA with no API.
+ * All critical data is present in the SMS text itself.
+ *
+ * SMS format:
+ *   "Dear {sender} You have successfully transferred ETB{amount} from account {masked}
+ *    to account {masked} ({receiver name}). Service charge... Thanks for Banking with CBE.
+ *    https://mbreciept.cbe.com.et/v2-XXXX"
  */
-async function verifyCBE(receiptUrl, myAccountNumber, expectedName) {
+function verifyCBEFromSMS(smsText, myAccountNumber, expectedName) {
     try {
-        // Build fallback URL without port 100 (port 100 is blocked on Hugging Face)
-        const txIdMatch = receiptUrl.match(/[?&]id=([A-Za-z0-9]+)/i);
-        const txId = txIdMatch ? txIdMatch[1] : null;
-        const urlsToTry = [receiptUrl];
-        if (txId && receiptUrl.includes(':100')) {
-            urlsToTry.push(`https://apps.cbe.com.et/?id=${txId}`);
+        if (!smsText) return { ok: false, error: 'No SMS text provided' };
+
+        // 1. Must be a CBE SMS
+        if (!/thanks?\s+for\s+banking\s+with\s+CBE|commercial\s+bank\s+of\s+ethiopia/i.test(smsText)) {
+            return { ok: false, error: 'SMS does not appear to be from CBE' };
         }
 
-        let response = null;
-        for (const url of urlsToTry) {
-            console.log(`[Scraper:CBE] Trying URL: ${url}`);
-            response = await fetchUrl(url);
-            if (response) { console.log(`[Scraper:CBE] Success with: ${url}`); break; }
-        }
-        if (!response) return { ok: false, error: 'CBE receipt page is unreachable (port 100 may be blocked)' };
-
-        const pageText = await extractText(response);
-
-        console.log(`\n[Scraper:CBE] ══════════ FULL PAGE TEXT ══════════`);
-        console.log(pageText);
-        console.log(`[Scraper:CBE] ════════════════════════════════════\n`);
-
-        // ── Amount ──
-        const amountMatch = pageText.match(/Transferred\s*Amount\s*([\d,]+\.?\d*)\s*ETB/i)
-            || pageText.match(/([\d,]+\.\d{2})\s*ETB/i);
-        const amount = amountMatch ? parseFloat(amountMatch[1].replace(/,/g, '')) : 0;
-        if (amount <= 0) return { ok: false, error: 'Amount not found on receipt' };
-
-        // ── Receiver Name ──
-        const nameMatch = pageText.match(/Receiver([A-Z][A-Za-z\s\.\'\\/]+?)(?=\s*Account)/i);
-        const receiverName = nameMatch ? nameMatch[1].trim().replace(/^(MR\.?|MRS\.?|MS\.?|DR\.?|MISS\.?)\s+/i, '').trim() : '';
-        if (!receiverName) return { ok: false, error: 'Receiver name could not be found' };
-
-        // ── Receiver Account ──
-        const receiverAccMatch = pageText.match(/Receiver[A-Z][A-Za-z\s\.\'\\/]+?Account([\d\*]{6,16})/i);
-        const receiverAcc = receiverAccMatch ? receiverAccMatch[1] : '';
-        if (!receiverAcc || !maskedAccountMatches(receiverAcc, myAccountNumber)) {
-            return { ok: false, error: `Account mismatch: receipt shows "${receiverAcc || 'nothing found'}"` };
+        // 2. Must indicate a successful transfer
+        if (!/successfully\s+transferred/i.test(smsText)) {
+            return { ok: false, error: 'SMS does not indicate a successful transfer' };
         }
 
-        // ── Date ──
-        const dateMatch = pageText.match(/Payment\s*Date\s*[&\s]*Time\s*(\d{1,2}\/\d{1,2}\/\d{4})[,\s]+(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)/i);
-        const txDate = dateMatch ? parseTransactionDate(`${dateMatch[1]} ${dateMatch[2]}`) : null;
-        if (!txDate) return { ok: false, error: 'Transaction date could not be found' };
+        // 3. Amount: "transferred ETB275.00"
+        const amountMatch = smsText.match(/transferred\s+ETB\s*([\d,]+\.?\d*)/i);
+        if (!amountMatch) return { ok: false, error: 'Could not parse transfer amount from CBE SMS' };
+        const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
+        if (!amount || amount <= 0) return { ok: false, error: 'Invalid amount in CBE SMS' };
 
-        console.log(`[Scraper:CBE] Amount: ${amount}, Name: "${receiverName}", Acc: "${receiverAcc}", Date: ${txDate}`);
+        // 4. Receiver account (masked): "to account 1**2067"
+        const toAccMatch = smsText.match(/to\s+account\s+([\d\*]+)/i);
+        const receiverAccMasked = toAccMatch ? toAccMatch[1].trim() : '';
+        if (!receiverAccMasked) return { ok: false, error: 'Receiver account not found in CBE SMS' };
 
+        // 5. Receiver account match (masked comparison)
+        if (!maskedAccountMatches(receiverAccMasked, myAccountNumber)) {
+            return { ok: false, error: `Account mismatch: SMS shows "${receiverAccMasked}" but expected ending "${myAccountNumber.toString().slice(-4)}"` };
+        }
+
+        // 6. Receiver name: "to account 1**2067 (Yonatan Desalegn Hagos)"
+        const nameMatch = smsText.match(/to\s+account\s+[\d\*]+\s*\(([^)]+)\)/i);
+        const receiverName = nameMatch ? nameMatch[1].trim() : '';
+        if (!receiverName) return { ok: false, error: 'Receiver name not found in CBE SMS' };
+
+        // 7. Name match
         if (expectedName && receiverName) {
             const cleanExpected = expectedName.toLowerCase().replace(/\s+/g, '');
             const cleanFound = receiverName.toLowerCase().replace(/\s+/g, '');
-            if (!cleanFound.includes(cleanExpected) && !cleanExpected.split(/\s+/).every(part => cleanFound.includes(part.toLowerCase()))) {
-                return { ok: false, error: `Name mismatch: receipt shows "${receiverName}"` };
+            if (!cleanFound.includes(cleanExpected) &&
+                !cleanExpected.split(/\s+/).every(part => part.length > 2 && cleanFound.includes(part.toLowerCase()))) {
+                return { ok: false, error: `Name mismatch: SMS shows "${receiverName}" but expected "${expectedName}"` };
             }
         }
 
-        return { ok: true, amount, receiver: receiverAcc, txDate };
-    } catch (error) {
-        console.error(`[Scraper:CBE] Error:`, error.message);
-        return { ok: false, error: 'CBE receipt page is unreachable or invalid' };
+        // 8. Receipt URL as unique TX ID
+        const urlMatch = smsText.match(/(https?:\/\/mbreciept\.cbe\.com\.et\/[^\s"']+)/i);
+        const receiptUrl = urlMatch ? urlMatch[1].trim() : null;
+
+        // CBE SMS does not embed a date — use now (48h replay protection done via unique URL in DB)
+        const txDate = new Date();
+
+        console.log(`[Scraper:CBE:SMS] ✅ Amount: ${amount} ETB | Receiver: "${receiverName}" (${receiverAccMasked}) | URL: ${receiptUrl}`);
+        return { ok: true, amount, receiver: receiverAccMasked, receiverName, txDate, receiptUrl };
+
+    } catch (e) {
+        console.error('[Scraper:CBE:SMS] Error:', e.message);
+        return { ok: false, error: 'CBE SMS parsing failed: ' + e.message };
     }
+}
+
+/**
+ * Verify a CBE transfer.
+ * Handles two URL formats:
+ *   1. Old format: https://apps.cbe.com.et:100/?id=XXXX  → scrape HTML page
+ *   2. New format: https://mbreciept.cbe.com.et/v2-XXXX   → JS SPA (no API), parse from SMS text
+ *
+ * @param {string} receiptUrl - The CBE receipt URL (extracted from SMS or sent directly)
+ * @param {string} smsText    - The full SMS text (may be same as receiptUrl if user sent URL only)
+ * @param {string} accNo      - Our account number (from admin settings)
+ * @param {string} accName    - Our account name (from admin settings)
+ */
+async function verifyCBE(receiptUrl, smsText, accNo, accName) {
+    const isNewFormat = receiptUrl && /mbreciept\.cbe\.com\.et/i.test(receiptUrl);
+    const isOldFormat = receiptUrl && /apps\.cbe\.com\.et/i.test(receiptUrl);
+
+    // ── NEW FORMAT: mbreciept.cbe.com.et ──────────────────────────────────────
+    // This page is a React SPA — no API available. Parse data from the SMS text.
+    if (isNewFormat) {
+        console.log(`[Scraper:CBE] New-format URL detected. Parsing from SMS text.`);
+        if (!smsText || !/successfully\s+transferred/i.test(smsText)) {
+            return { ok: false, error: 'No CBE transfer SMS text found. Please paste the full SMS message from CBE.' };
+        }
+
+        // 1. Must be a CBE SMS
+        if (!/thanks?\s+for\s+banking\s+with\s+CBE|commercial\s+bank\s+of\s+ethiopia/i.test(smsText)) {
+            return { ok: false, error: 'SMS does not appear to be from CBE. Please paste the full CBE SMS message.' };
+        }
+
+        // 2. Amount: "transferred ETB275.00"
+        const amountMatch = smsText.match(/transferred\s+ETB\s*([\d,]+\.?\d*)/i);
+        if (!amountMatch) return { ok: false, error: 'Could not parse transfer amount from CBE SMS' };
+        const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
+        if (!amount || amount <= 0) return { ok: false, error: 'Invalid amount in CBE SMS' };
+
+        // 3. Receiver account (masked): "to account 1**2067"
+        const toAccMatch = smsText.match(/to\s+account\s+([\d\*]+)/i);
+        const receiverAccMasked = toAccMatch ? toAccMatch[1].trim() : '';
+        if (!receiverAccMasked) return { ok: false, error: 'Receiver account not found in CBE SMS' };
+
+        // 4. Account match
+        if (!maskedAccountMatches(receiverAccMasked, accNo)) {
+            return { ok: false, error: `Account mismatch: SMS shows "${receiverAccMasked}" but expected ending "${accNo.toString().slice(-4)}"` };
+        }
+
+        // 5. Receiver name: "to account 1**2067 (Yonatan Desalegn Hagos)"
+        const nameMatch = smsText.match(/to\s+account\s+[\d\*]+\s*\(([^)]+)\)/i);
+        const receiverName = nameMatch ? nameMatch[1].trim() : '';
+        if (!receiverName) return { ok: false, error: 'Receiver name not found in CBE SMS' };
+
+        // 6. Name match
+        if (accName && receiverName) {
+            const cleanExpected = accName.toLowerCase().replace(/\s+/g, '');
+            const cleanFound = receiverName.toLowerCase().replace(/\s+/g, '');
+            if (!cleanFound.includes(cleanExpected) &&
+                !cleanExpected.split(/\s+/).every(part => part.length > 2 && cleanFound.includes(part.toLowerCase()))) {
+                return { ok: false, error: `Name mismatch: SMS shows "${receiverName}" but expected "${accName}"` };
+            }
+        }
+
+        // 7. Receipt URL as unique TX ID (use the URL we already have or extract from SMS)
+        const extractedUrl = receiptUrl ||
+            (smsText.match(/(https?:\/\/mbreciept\.cbe\.com\.et\/[^\s"']+)/i) || [])[1];
+        const txDate = new Date(); // CBE SMS has no date field
+
+        console.log(`[Scraper:CBE] \u2705 Amount: ${amount} ETB | Receiver: "${receiverName}" (${receiverAccMasked}) | URL: ${extractedUrl}`);
+        return { ok: true, amount, receiver: receiverAccMasked, receiverName, txDate, receiptUrl: extractedUrl };
+    }
+
+    // ── OLD FORMAT: apps.cbe.com.et (HTML scrape) ─────────────────────────────
+    if (isOldFormat) {
+        try {
+            const txIdMatch = receiptUrl.match(/[?&]id=([A-Za-z0-9]+)/i);
+            const txId = txIdMatch ? txIdMatch[1] : null;
+            const urlsToTry = [receiptUrl];
+            // Port 100 is often blocked — try without port as fallback
+            if (txId && receiptUrl.includes(':100')) {
+                urlsToTry.push(`https://apps.cbe.com.et/?id=${txId}`);
+            }
+
+            let response = null;
+            for (const url of urlsToTry) {
+                console.log(`[Scraper:CBE] Trying URL: ${url}`);
+                response = await fetchUrl(url);
+                if (response) { console.log(`[Scraper:CBE] Success with: ${url}`); break; }
+            }
+            if (!response) return { ok: false, error: 'CBE receipt page is unreachable (try pasting the full SMS text instead)' };
+
+            const pageText = await extractText(response);
+            console.log(`\n[Scraper:CBE] \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 PAGE TEXT \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`);
+            console.log(pageText.slice(0, 800));
+            console.log(`[Scraper:CBE] \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\n`);
+
+            const amountMatch = pageText.match(/Transferred\s*Amount\s*([\d,]+\.?\d*)\s*ETB/i)
+                || pageText.match(/([\d,]+\.\d{2})\s*ETB/i);
+            const amount = amountMatch ? parseFloat(amountMatch[1].replace(/,/g, '')) : 0;
+            if (amount <= 0) return { ok: false, error: 'Amount not found on CBE receipt' };
+
+            const nameMatch = pageText.match(/Receiver([A-Z][A-Za-z\s\.'\/']+?)(?=\s*Account)/i);
+            const receiverName = nameMatch ? nameMatch[1].trim().replace(/^(MR\.?|MRS\.?|MS\.?|DR\.?|MISS\.?)\s+/i, '').trim() : '';
+            if (!receiverName) return { ok: false, error: 'Receiver name could not be found on CBE receipt' };
+
+            const receiverAccMatch = pageText.match(/Receiver[A-Z][A-Za-z\s\.'\/']+?Account([\d\*]{6,16})/i);
+            const receiverAcc = receiverAccMatch ? receiverAccMatch[1] : '';
+            if (!receiverAcc || !maskedAccountMatches(receiverAcc, accNo)) {
+                return { ok: false, error: `Account mismatch: receipt shows "${receiverAcc || 'nothing found'}"` };
+            }
+
+            const dateMatch = pageText.match(/Payment\s*Date\s*[&\s]*Time\s*(\d{1,2}\/\d{1,2}\/\d{4})[,\s]+(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)/i);
+            const txDate = dateMatch ? parseTransactionDate(`${dateMatch[1]} ${dateMatch[2]}`) : null;
+            if (!txDate) return { ok: false, error: 'Transaction date could not be found on CBE receipt' };
+
+            if (accName && receiverName) {
+                const cleanExpected = accName.toLowerCase().replace(/\s+/g, '');
+                const cleanFound = receiverName.toLowerCase().replace(/\s+/g, '');
+                if (!cleanFound.includes(cleanExpected) && !cleanExpected.split(/\s+/).every(part => cleanFound.includes(part.toLowerCase()))) {
+                    return { ok: false, error: `Name mismatch: receipt shows "${receiverName}"` };
+                }
+            }
+
+            console.log(`[Scraper:CBE] \u2705 Amount: ${amount}, Name: "${receiverName}", Acc: "${receiverAcc}", Date: ${txDate}`);
+            return { ok: true, amount, receiver: receiverAcc, receiverName, txDate };
+        } catch (error) {
+            console.error(`[Scraper:CBE] Error:`, error.message);
+            return { ok: false, error: 'CBE receipt page is unreachable or invalid' };
+        }
+    }
+
+    // ── No recognizable URL format ─────────────────────────────────────────────
+    return { ok: false, error: 'Unrecognized CBE URL format. Please paste the full SMS text from CBE.' };
 }
 
 /**

@@ -382,7 +382,7 @@ if (!AGENT_BOT_TOKEN) {
                         `🎉 *Congratulations! You are now a Smart Bingo Agent!*\n\n` +
                         `Here is your unique referral link:\n\n` +
                         `🔗 \`${link}\`\n\n` +
-                        `Share this link with people. When they register and play, you earn *1 ETB per card*!\n\n` +
+                        `Share this link with people. When they register and play, you earn *0.5 ETB per card*!\n\n` +
                         `Use /start to open your agent dashboard.`,
                         { parse_mode: 'Markdown' }
                     ).catch(() => { });

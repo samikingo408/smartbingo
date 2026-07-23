@@ -1346,7 +1346,7 @@ try {
     bot.onText(/\/agent/, async (msg) => {
         const chatId = msg.chat.id;
         if (await checkMaintenance(chatId)) return;
-        const AGENT_BOT_USERNAME = 'Max_agent1_bot'; // hardcoded
+        const AGENT_BOT_USERNAME = 'Smartagent12bot'; // hardcoded
         bot.sendMessage(msg.chat.id,
             `👉 Agent ለመሆን/Register here as an agent:\n@${AGENT_BOT_USERNAME}`,
             { parse_mode: 'Markdown' }

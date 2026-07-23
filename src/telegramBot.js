@@ -10,12 +10,12 @@ const TelegramBot = require('node-telegram-bot-api');
 const db = require('./db');
 
 // verifyTelebirr removed — Telebirr now uses SMS webhook instead of scraper
-const { verifyWithVerifyEt, pollVerifyEt } = require('./utils/scraper');
+const { verifyWithVerifyEt, pollVerifyEt, verifyCBEBirr, verifyCBE, verifyAbyssinia } = require('./utils/scraper');
 
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const WEBAPP_URL = process.env.FRONTEND_URL || process.env.WEBAPP_URL || 'https://your-frontend-url.com';
-const SUPPORT_USERNAME = '@Smartbingosupport';
+const SUPPORT_USERNAME = '@Maxbingosupport';
 
 // Payment account details
 const ACCOUNTS = {
@@ -34,9 +34,9 @@ if (!BOT_TOKEN) {
         { command: 'balance', description: 'balance' },
         { command: 'deposit', description: 'Deposit' },
         { command: 'withdraw', description: 'Withdraw' },
-        { command: 'transfer', description: 'Transfer' },
+       /* { command: 'transfer', description: 'Transfer' },*/
         { command: 'agent', description: 'agent' },
-        { command: 'invite', description: 'Invite & Earn' },
+       /* { command: 'invite', description: 'Invite & Earn' }, */
         { command: 'contact', description: 'Support' }
     ];
 
@@ -106,7 +106,7 @@ if (!BOT_TOKEN) {
 
     // ─── Helper: sendPlayLink ────────────────────────────────────────────────────
     function sendPlayLink(chatId) {
-        bot.sendMessage(chatId, '🎱 Enjoy playing Smart Bingo.', {
+        bot.sendMessage(chatId, 'Have fun with Smart Bingo.', {
             reply_markup: {
                 inline_keyboard: [
                     [{ text: '🎲 Play', web_app: { url: WEBAPP_URL } }]
@@ -315,10 +315,9 @@ if (!BOT_TOKEN) {
 
     // ─── Deposit method instruction messages ──────────────────────────────────────
     function depositInstructions(method) {
-        const settings = getSettings();
+        const settings = adminBot.getSettings();
         let accNo = settings[`dep_${method}_acc_no`] || ACCOUNTS[method]?.number || 'Not set';
         const accName = settings[`dep_${method}_acc_name`] || ACCOUNTS[method]?.name || 'Not set';
-        const minDeposit = settings.min_deposit !== undefined ? settings.min_deposit : 50;
 
         // Ensure Telebirr and CBEbirr account numbers start with 0
         if ((method === 'telebirr' || method === 'cbebirr') && accNo !== 'Not set') {
@@ -342,7 +341,7 @@ if (!BOT_TOKEN) {
 
         return (
             `🏦 *${label} Deposit*\n\n` +
-            `*Account:* \`${accNo}\` — ${accName} *${minDeposit}*\n\n` +
+            `*Account:* \`${accNo}\` — ${accName}\n\n` +
             `━━━━━━━━━━━━━━━\n` +
             `${stepIcon} *${stepsLabel}*\n\n` +
             `1️⃣ ከላይ ባለው የ ${label.replace(/[📱💳🏦]\s?/g, '')} አካውንት ገንዘቡን ያስገቡ።\n` +
@@ -357,7 +356,7 @@ if (!BOT_TOKEN) {
     // ─── callback_query: deposit method button clicks ────────────────────────────
 
     function sendInvite(chatId) {
-        const link = `https://t.me/${process.env.BINGO_BOT_USERNAME || 'SmartBingo_Bot'}?start=ref_${chatId}`;
+        const link = `https://t.me/${process.env.BINGO_BOT_USERNAME || '@Smartbingo12bot'}?start=ref_${chatId}`;
         const text = `🔗 *Your Invitation Link*\n\n` +
             `Share this link with your friends! When they register, they get *20 ETB* bonus!\n\n` +
             `Link: \`${link}\``;
@@ -528,13 +527,7 @@ if (!BOT_TOKEN) {
                     );
                 }
                 if (amount > parseFloat(settings.max_withdrawal || 5000)) {
-                    delete pendingWithdrawal[chatId];
-                    return bot.sendMessage(chatId,
-                        `❌ *Withdrawal Cancelled.*\n\n` +
-                        `Maximum withdrawal per request is *${settings.max_withdrawal || 5000} ETB*.\n\n` +
-                        `Please type /withdraw again to start a new request.`,
-                        { parse_mode: 'Markdown' }
-                    );
+                    return bot.sendMessage(chatId, `❌ Maximum withdrawal per request is *${settings.max_withdrawal || 5000} ETB*.`, { parse_mode: 'Markdown' });
                 }
 
                 try {
@@ -716,22 +709,14 @@ try {
         const tbAccName = depSettingsTB.dep_telebirr_acc_name || ACCOUNTS['telebirr'].name;
         let tbResult = await verifyWithVerifyEt(txId, 'telebirr', null, tbAccNo, tbAccName);
         if (tbResult && !tbResult.ok && tbResult.failureType === 'queued' && tbResult.statusUrl) {
-            tbResult = await pollVerifyEt(tbResult.statusUrl, 45000);
+            tbResult = await pollVerifyEt(tbResult.statusUrl, 25000);
         }
 
         bot.deleteMessage(chatId, verifyingMsgTB.message_id).catch(() => {});
 
         if (!tbResult || !tbResult.ok) {
-            delete pendingDeposit[chatId];
-            if (tbResult && tbResult.failureType === 'queued') {
-                return bot.sendMessage(chatId,
-                    '⏳ *Verification is Taking Longer Than Expected*\n\n' +
-                    `The bank or verification system is currently responding slowly.\n\n` +
-                    `Please wait 1-2 minutes and submit your transaction ID \`${txId}\` again. Your funds are safe.`,
-                    { parse_mode: 'Markdown' }
-                );
-            }
             await logSuspicious(chatId, 'Failed Telebirr Verification', `TXID ${txId}. Error: ${tbResult?.error}`);
+            delete pendingDeposit[chatId];
             return bot.sendMessage(chatId,
                 '❌ *Deposit Verification Failed*\n\n' +
                 `${tbResult?.error || 'Could not verify the transaction.'}\n\n` +
@@ -756,25 +741,6 @@ try {
 
         const amount = tbResult.amount;
 
-        // Check limits
-        const settings = getSettings();
-        const minDep = settings.min_deposit !== undefined ? parseFloat(settings.min_deposit) : 50;
-        const maxDep = settings.max_deposit !== undefined ? parseFloat(settings.max_deposit) : 10000;
-
-        if (amount < minDep) {
-            delete pendingDeposit[chatId];
-            return bot.sendMessage(chatId,
-                `❌ *Deposit Rejected*\n\nYour deposit amount of *${amount} ETB* is below the minimum limit of *${minDep} ETB*.`,
-                { parse_mode: 'Markdown' }
-            );
-        }
-        if (amount > maxDep) {
-            delete pendingDeposit[chatId];
-            return bot.sendMessage(chatId,
-                `❌ *Deposit Rejected*\n\nYour deposit amount of *${amount} ETB* is above the maximum limit of *${maxDep} ETB*.`,
-                { parse_mode: 'Markdown' }
-            );
-        }
 
         try {
             await db.query(
@@ -915,59 +881,259 @@ try {
     );
 
     const depSettingsMethod = adminBot.getSettings();
-    const accNo = depSettingsMethod[`dep_${method}_acc_no`] || ACCOUNTS[method].number;
-    const accName = depSettingsMethod[`dep_${method}_acc_name`] || ACCOUNTS[method].name;
+    const accNo = depSettingsMethod[`dep_${method}_acc_no`] || ACCOUNTS[method]?.number || '';
+    const accName = depSettingsMethod[`dep_${method}_acc_name`] || ACCOUNTS[method]?.name || '';
     let verifyResult;
 
-    verifyResult = await verifyWithVerifyEt(txId, method, null, accNo, accName);
-    if (verifyResult && !verifyResult.ok && verifyResult.failureType === 'queued' && verifyResult.statusUrl) {
-        verifyResult = await pollVerifyEt(verifyResult.statusUrl, 45000);
-    }
-
-    if (!verifyResult || !verifyResult.ok) {
-        bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => { });
-        delete pendingDeposit[chatId];
-        if (verifyResult && verifyResult.failureType === 'queued') {
+    if (method === 'cbe') {
+        // ─── CBE: Parse directly from SMS text ───────────────────────────────────────
+        // The receipt URL (mbreciept.cbe.com.et) is a JS SPA with no API.
+        // All data needed is in the SMS. The receipt URL is the unique dedup key.
+        const cbeResult = await verifyCBE(receiptUrl, smsText, accNo, accName);
+        if (!cbeResult.ok) {
+            bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => {});
+            delete pendingDeposit[chatId];
+            await logSuspicious(chatId, 'Failed CBE Verification', `Error: ${cbeResult.error}`);
             return bot.sendMessage(chatId,
-                '⏳ *Verification is Taking Longer Than Expected*\n\n' +
-                `The bank or verification system is currently responding slowly.\n\n` +
-                `Please wait 1-2 minutes and submit your transaction ID \`${txId}\` again. Your funds are safe.`,
+                '❌ *Deposit Verification Failed*\n\n' +
+                `${cbeResult.error}\n\n` +
+                `📝 Please paste the *full SMS* from CBE including the https://mbreciept.cbe.com.et/... link.\n\n` +
+                `💬 Need help? Contact ${SUPPORT_USERNAME}`,
                 { parse_mode: 'Markdown' }
             );
         }
-        await logSuspicious(chatId, 'Failed Verification', `TXID ${txId} via ${method}. Error: ${verifyResult?.error}`);
+        // Use the receipt URL path as the unique dedup key (e.g. "v2-hfHCxFSfzOwu7QRumzrZ")
+        const cbeReceiptUrl = cbeResult.receiptUrl || receiptUrl;
+        const cbeUniqueTxId = cbeReceiptUrl
+            ? (cbeReceiptUrl.match(/\/([A-Za-z0-9_\-]{8,})\s*$/) || [])[1] || cbeReceiptUrl
+            : txId;
+        if (!cbeUniqueTxId) {
+            bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => {});
+            delete pendingDeposit[chatId];
+            return bot.sendMessage(chatId,
+                '❌ *Deposit Verification Failed*\n\n' +
+                'No CBE receipt URL found in your SMS. Please paste the *full SMS message* including the mbreciept link.\n\n' +
+                `💬 Need help? Contact ${SUPPORT_USERNAME}`,
+                { parse_mode: 'Markdown' }
+            );
+        }
+        // Dedup check on the CBE receipt URL path
+        const cbeDupCheck = await db.query('SELECT id FROM deposits WHERE tx_id = $1', [cbeUniqueTxId]);
+        if (cbeDupCheck.rows.length > 0) {
+            await logSuspicious(chatId, 'Duplicate CBE Receipt', `Reuse: ${cbeUniqueTxId}`);
+            bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => {});
+            delete pendingDeposit[chatId];
+            return bot.sendMessage(chatId,
+                '❌ *Deposit Verification Failed*\n\nThis CBE receipt has already been used.\n\n' +
+                `💬 Need help? Contact ${SUPPORT_USERNAME}`,
+                { parse_mode: 'Markdown' }
+            );
+        }
+        // Save and credit
+        try {
+            await db.query(
+                'INSERT INTO deposits (chat_id, tx_id, amount, method) VALUES ($1, $2, $3, $4)',
+                [chatId, cbeUniqueTxId, cbeResult.amount, 'cbe']
+            );
+        } catch (err) {
+            if (err.code === '23505') {
+                bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => {});
+                delete pendingDeposit[chatId];
+                return bot.sendMessage(chatId, '❌ *Deposit Rejected*\n\nThis CBE receipt has already been used.', { parse_mode: 'Markdown' });
+            }
+            throw err;
+        }
+        await db.query('UPDATE users SET balance = balance + $1 WHERE chat_id = $2', [cbeResult.amount, chatId]);
+        const cbeDepSettings = adminBot.getSettings();
+        const cbeBonusPct = parseFloat(cbeDepSettings.deposit_bonus_pct || 0);
+        let cbeBonusCredit = 0;
+        if (cbeBonusPct > 0) {
+            cbeBonusCredit = Math.floor((cbeResult.amount * cbeBonusPct / 100) * 100) / 100;
+            await db.query('UPDATE users SET balance = balance + $1 WHERE chat_id = $2', [cbeBonusCredit, chatId]);
+        }
+        const cbeBalRes = await db.query('SELECT balance FROM users WHERE chat_id = $1', [chatId]);
+        const cbeNewBalance = parseFloat(cbeBalRes.rows[0].balance).toFixed(2);
+        bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => {});
+        delete pendingDeposit[chatId];
         return bot.sendMessage(chatId,
-            '❌ *Deposit Verification Failed*\n\n' +
-            `The transaction \`${txId}\` could not be verified.\n\n` +
-            `📝 Please ensure you have paid to the correct account: \`${accNo}\`\n\n` +
-            `💬 If you are sure this is correct, contact ${SUPPORT_USERNAME}`,
-            { parse_mode: 'Markdown' }
+            `✅ *Deposit Successful!*\n\n` +
+            `💰 Amount Credited: *${(cbeResult.amount + cbeBonusCredit).toFixed(2)} ETB*\n` +
+            `🏦 Method: CBE\n\n` +
+            `📊 New Balance: *${cbeNewBalance} ETB*\n\n` +
+            `Thank you! Use /play to start. 🎱`,
+            { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🎲 Play', web_app: { url: WEBAPP_URL } }]] } }
         );
+
+    } else if (method === 'cbebirr') {
+        // ─── CBEBirr: Parse the PDF receipt directly ──────────────────────────────────
+        if (!receiptUrl) {
+            bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => {});
+            delete pendingDeposit[chatId];
+            return bot.sendMessage(chatId,
+                '❌ *Deposit Verification Failed*\n\n' +
+                'No CBEBirr receipt URL found. Please paste the full SMS including the cbepay1.cbe.com.et link.\n\n' +
+                `💬 Need help? Contact ${SUPPORT_USERNAME}`,
+                { parse_mode: 'Markdown' }
+            );
+        }
+        const cbebirrResult = await verifyCBEBirr(receiptUrl, accNo, accName);
+        if (!cbebirrResult.ok) {
+            bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => {});
+            delete pendingDeposit[chatId];
+            await logSuspicious(chatId, 'Failed CBEBirr Verification', `URL: ${receiptUrl}. Error: ${cbebirrResult.error}`);
+            return bot.sendMessage(chatId,
+                '❌ *Deposit Verification Failed*\n\n' +
+                `${cbebirrResult.error}\n\n` +
+                `📝 Please ensure you paid to: \`${accNo}\`\n\n` +
+                `💬 Need help? Contact ${SUPPORT_USERNAME}`,
+                { parse_mode: 'Markdown' }
+            );
+        }
+        // 48-hour check
+        if (cbebirrResult.txDate) {
+            const cbebirrDiff = (Date.now() - cbebirrResult.txDate) / (1000 * 60 * 60);
+            if (cbebirrDiff > 48) {
+                bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => {});
+                delete pendingDeposit[chatId];
+                return bot.sendMessage(chatId,
+                    '❌ *Deposit Rejected*\n\nThis transaction is too old. Transactions must be submitted within *48 hours*.\n\n' +
+                    `Transaction Date: *${cbebirrResult.txDate.toLocaleString()}*`,
+                    { parse_mode: 'Markdown' }
+                );
+            }
+        }
+        // Save and credit using txId (TID from URL)
+        try {
+            await db.query(
+                'INSERT INTO deposits (chat_id, tx_id, amount, method) VALUES ($1, $2, $3, $4)',
+                [chatId, txId, cbebirrResult.amount, 'cbebirr']
+            );
+        } catch (err) {
+            if (err.code === '23505') {
+                bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => {});
+                delete pendingDeposit[chatId];
+                return bot.sendMessage(chatId, '❌ *Deposit Rejected*\n\nThis transaction ID has already been used.', { parse_mode: 'Markdown' });
+            }
+            throw err;
+        }
+        await db.query('UPDATE users SET balance = balance + $1 WHERE chat_id = $2', [cbebirrResult.amount, chatId]);
+        const cbebirrDepSettings = adminBot.getSettings();
+        const cbebirrBonusPct = parseFloat(cbebirrDepSettings.deposit_bonus_pct || 0);
+        let cbebirrBonusCredit = 0;
+        if (cbebirrBonusPct > 0) {
+            cbebirrBonusCredit = Math.floor((cbebirrResult.amount * cbebirrBonusPct / 100) * 100) / 100;
+            await db.query('UPDATE users SET balance = balance + $1 WHERE chat_id = $2', [cbebirrBonusCredit, chatId]);
+        }
+        const cbebirrBalRes = await db.query('SELECT balance FROM users WHERE chat_id = $1', [chatId]);
+        const cbebirrNewBalance = parseFloat(cbebirrBalRes.rows[0].balance).toFixed(2);
+        bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => {});
+        delete pendingDeposit[chatId];
+        return bot.sendMessage(chatId,
+            `✅ *Deposit Successful!*\n\n` +
+            `💰 Amount Credited: *${(cbebirrResult.amount + cbebirrBonusCredit).toFixed(2)} ETB*\n` +
+            `🔖 Transaction ID: \`${txId}\`\n` +
+            `🏦 Method: CBEBirr\n\n` +
+            `📊 New Balance: *${cbebirrNewBalance} ETB*\n\n` +
+            `Thank you! Use /play to start. 🎱`,
+            { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🎲 Play', web_app: { url: WEBAPP_URL } }]] } }
+        );
+
+    } else if (method === 'abyssinia') {
+        // ─── Abyssinia: Parse the JSON API directly ───────────────────────────────────
+        if (!receiptUrl) {
+            bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => {});
+            delete pendingDeposit[chatId];
+            return bot.sendMessage(chatId,
+                '❌ *Deposit Verification Failed*\n\n' +
+                'No Abyssinia receipt URL found. Please paste the full SMS including the cs.bankofabyssinia.com link.\n\n' +
+                `💬 Need help? Contact ${SUPPORT_USERNAME}`,
+                { parse_mode: 'Markdown' }
+            );
+        }
+        const abyssiniaResult = await verifyAbyssinia(receiptUrl, accNo, accName);
+        if (!abyssiniaResult.ok) {
+            bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => {});
+            delete pendingDeposit[chatId];
+            await logSuspicious(chatId, 'Failed Abyssinia Verification', `URL: ${receiptUrl}. Error: ${abyssiniaResult.error}`);
+            return bot.sendMessage(chatId,
+                '❌ *Deposit Verification Failed*\n\n' +
+                `${abyssiniaResult.error}\n\n` +
+                `📝 Please ensure you paid to: \`${accNo}\`\n\n` +
+                `💬 Need help? Contact ${SUPPORT_USERNAME}`,
+                { parse_mode: 'Markdown' }
+            );
+        }
+        // 48-hour check
+        if (abyssiniaResult.txDate) {
+            const abyssiniaDiff = (Date.now() - abyssiniaResult.txDate) / (1000 * 60 * 60);
+            if (abyssiniaDiff > 48) {
+                bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => {});
+                delete pendingDeposit[chatId];
+                return bot.sendMessage(chatId,
+                    '❌ *Deposit Rejected*\n\nThis transaction is too old. Transactions must be submitted within *48 hours*.\n\n' +
+                    `Transaction Date: *${abyssiniaResult.txDate.toLocaleString()}*`,
+                    { parse_mode: 'Markdown' }
+                );
+            }
+        }
+        // Save and credit using txId (TID from URL)
+        try {
+            await db.query(
+                'INSERT INTO deposits (chat_id, tx_id, amount, method) VALUES ($1, $2, $3, $4)',
+                [chatId, txId, abyssiniaResult.amount, 'abyssinia']
+            );
+        } catch (err) {
+            if (err.code === '23505') {
+                bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => {});
+                delete pendingDeposit[chatId];
+                return bot.sendMessage(chatId, '❌ *Deposit Rejected*\n\nThis transaction ID has already been used.', { parse_mode: 'Markdown' });
+            }
+            throw err;
+        }
+        await db.query('UPDATE users SET balance = balance + $1 WHERE chat_id = $2', [abyssiniaResult.amount, chatId]);
+        const abyssiniaDepSettings = adminBot.getSettings();
+        const abyssiniaBonusPct = parseFloat(abyssiniaDepSettings.deposit_bonus_pct || 0);
+        let abyssiniaBonusCredit = 0;
+        if (abyssiniaBonusPct > 0) {
+            abyssiniaBonusCredit = Math.floor((abyssiniaResult.amount * abyssiniaBonusPct / 100) * 100) / 100;
+            await db.query('UPDATE users SET balance = balance + $1 WHERE chat_id = $2', [abyssiniaBonusCredit, chatId]);
+        }
+        const abyssiniaBalRes = await db.query('SELECT balance FROM users WHERE chat_id = $1', [chatId]);
+        const abyssiniaNewBalance = parseFloat(abyssiniaBalRes.rows[0].balance).toFixed(2);
+        bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => {});
+        delete pendingDeposit[chatId];
+        return bot.sendMessage(chatId,
+            `✅ *Deposit Successful!*\n\n` +
+            `💰 Amount Credited: *${(abyssiniaResult.amount + abyssiniaBonusCredit).toFixed(2)} ETB*\n` +
+            `🔖 Transaction ID: \`${txId}\`\n` +
+            `🏦 Method: Abyssinia\n\n` +
+            `📊 New Balance: *${abyssiniaNewBalance} ETB*\n\n` +
+            `Thank you! Use /play to start. 🎱`,
+            { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🎲 Play', web_app: { url: WEBAPP_URL } }]] } }
+        );
+
+    } else {
+        // ─── Telebirr (and any other method): use verify.et ─────────────────────────
+        verifyResult = await verifyWithVerifyEt(txId, method, null, accNo, accName);
+        if (verifyResult && !verifyResult.ok && verifyResult.failureType === 'queued' && verifyResult.statusUrl) {
+            verifyResult = await pollVerifyEt(verifyResult.statusUrl, 25000);
+        }
     }
 
+            if (!verifyResult || !verifyResult.ok) {
+                bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => { });
+                delete pendingDeposit[chatId];
+                await logSuspicious(chatId, 'Failed Verification', `TXID ${txId} via ${method}. Error: ${verifyResult?.error}`);
+                return bot.sendMessage(chatId,
+                    '❌ *Deposit Verification Failed*\n\n' +
+                    `The transaction \`${txId}\` could not be verified.\n\n` +
+                    `📝 Please ensure you have paid to the correct account: \`${accNo}\`\n\n` +
+                    `💬 If you are sure this is correct, contact ${SUPPORT_USERNAME}`,
+                    { parse_mode: 'Markdown' }
+                );
+            }
+
             const { amount, txDate } = verifyResult;
-
-            // Check limits
-            const depSettings = getSettings();
-            const minDep = depSettings.min_deposit !== undefined ? parseFloat(depSettings.min_deposit) : 50;
-            const maxDep = depSettings.max_deposit !== undefined ? parseFloat(depSettings.max_deposit) : 10000;
-
-            if (amount < minDep) {
-                bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => { });
-                delete pendingDeposit[chatId];
-                return bot.sendMessage(chatId,
-                    `❌ *Deposit Rejected*\n\nYour deposit amount of *${amount} ETB* is below the minimum limit of *${minDep} ETB*.`,
-                    { parse_mode: 'Markdown' }
-                );
-            }
-            if (amount > maxDep) {
-                bot.deleteMessage(chatId, verifyingMsg.message_id).catch(() => { });
-                delete pendingDeposit[chatId];
-                return bot.sendMessage(chatId,
-                    `❌ *Deposit Rejected*\n\nYour deposit amount of *${amount} ETB* is above the maximum limit of *${maxDep} ETB*.`,
-                    { parse_mode: 'Markdown' }
-                );
-            }
 
             // ── Step 4: Validate Transaction Age (Max 72 Hours) ──
             if (!txDate) {
@@ -1180,15 +1346,9 @@ try {
     bot.onText(/\/agent/, async (msg) => {
         const chatId = msg.chat.id;
         if (await checkMaintenance(chatId)) return;
-        const AGENT_BOT_USERNAME = 'Smart_agent_bot'; // hardcoded
+        const AGENT_BOT_USERNAME = 'Max_agent1_bot'; // hardcoded
         bot.sendMessage(msg.chat.id,
-            `💼 *Become a Smart Bingo Agent*\n\n` +
-            `Earn commissions every time your invited players play!\n\n` +
-            `💰 *Commission:* 1 ETB per card played by your invited users\n\n` +
-             `የራስ ቢንጎ ኤጀንት በመሆን እና invite ያደረጉት ሰው 1 ካርቴላ በያዘ ቁጥር 1 ብር ያግኙ \n\n` +  
-               `ለመመዝገብ :- ከዚህ ስር የሚገኘውን link በመንካት request አድርገው...invite ማድረጊያ link ይላክሎታል \n\n `  +
-              `እርሱን link በማጋራት invite ያድረጉ።\n\n` +
-            `👉 Register here as an agent:\n@${AGENT_BOT_USERNAME}`,
+            `👉 Agent ለመሆን/Register here as an agent:\n@${AGENT_BOT_USERNAME}`,
             { parse_mode: 'Markdown' }
         );
     });

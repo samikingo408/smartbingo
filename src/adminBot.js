@@ -2594,9 +2594,9 @@ if (!ADMIN_BOT_TOKEN) {
 Your referral link:
 ${link}
 
-Share it and earn 1 ETB per card played by your users!
+Share it and earn 0.5 ETB per card played by your users!
 
-Invite ያደረጉት ሰው 1 ካርቴላ ይዞ ሲጫወት 1 ብር commission ያገኛሉ።
+Invite ያደረጉት ሰው 1 ካርቴላ ይዞ ሲጫወት 50 ሳንቲም commission ያገኛሉ።
 
 ለማስጀመር /start ይጫኑ `;
 

@@ -15,7 +15,7 @@ const { verifyWithVerifyEt, pollVerifyEt, verifyCBEBirr, verifyCBE, verifyAbyssi
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const WEBAPP_URL = process.env.FRONTEND_URL || process.env.WEBAPP_URL || 'https://your-frontend-url.com';
-const SUPPORT_USERNAME = '@Maxbingosupport';
+const SUPPORT_USERNAME = '@Smartbingosupport';
 
 // Payment account details
 const ACCOUNTS = {

@@ -23,9 +23,9 @@ const ADMIN_BOT_TOKEN = process.env.ADMIN_BOT_TOKEN;
 const AGENT_BOT_TOKEN = process.env.AGENT_BOT_TOKEN;
 const BINGO_BOT_TOKEN = process.env.BOT_TOKEN;
 const SEED_ADMIN_ID = process.env.SEED_ADMIN_ID;
-const BINGO_BOT_USERNAME = process.env.BINGO_BOT_USERNAME || 'Smart_bingo_bot';
-const ADMIN_BOT_USERNAME = process.env.ADMIN_BOT_USERNAME || 'Tellemamadimbot';
-const AGENT_BOT_USERNAME = 'Smart_agent_bot'; // hardcoded
+const BINGO_BOT_USERNAME = process.env.BINGO_BOT_USERNAME || 'Smartbingo12bot';
+const ADMIN_BOT_USERNAME = process.env.ADMIN_BOT_USERNAME || 'smartadmin12bot';
+const AGENT_BOT_USERNAME = 'Smartagent12bot'; // hardcoded
 const WEBAPP_URL = process.env.WEBAPP_URL || 'https://your-frontend-url.com';
 const FRONTEND_URL = process.env.FRONTEND_URL || process.env.WEBAPP_URL || 'https://your-frontend-url.com';
 if (!ADMIN_BOT_TOKEN) {
@@ -685,7 +685,7 @@ if (!ADMIN_BOT_TOKEN) {
                     `, [targetId, first_name, username, refCode]);
 
                     if (bingoBot) {
-                        const agentBotUsername = process.env.AGENT_BOT_USERNAME || 'Smart_agent_bot';
+                        const agentBotUsername = process.env.AGENT_BOT_USERNAME || 'Smartagent12bot';
                         bingoBot.sendMessage(targetId, `🎉 *Congratulations! You are now an Agent!*\n\nYour referral link: \`https://t.me/${process.env.BINGO_BOT_USERNAME || 'SmartBingo_Bot'}?start=${refCode}\`\n\nGo to @${agentBotUsername} to manage your agent account!`, { parse_mode: 'Markdown' }).catch((e) => { console.error('Failed to send agent promo message', e.message); });
                     }
                     bot.answerCallbackQuery(query.id, { text: '✅ Agent added successfully', show_alert: true });
@@ -904,7 +904,7 @@ if (!ADMIN_BOT_TOKEN) {
                 referral_code = EXCLUDED.referral_code
         `, [targetId, first_name, username, refCode]);
 
-                    const link = `https://t.me/${process.env.BINGO_BOT_USERNAME || 'SmartBingo_Bot'}?start=${refCode}`;
+                    const link = `https://t.me/${process.env.BINGO_BOT_USERNAME || 'SmartBingo12Bot'}?start=${refCode}`;
 
                     // Notify agent via AgentBot only
                     if (agentBot) {

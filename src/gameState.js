@@ -62,7 +62,7 @@ function generateRobotPhone() {
 const LOBBY_DURATION = 40;   // seconds
 const RESULT_DISPLAY = 10;    // seconds to show results before reset
 const NUMBER_CALL_INTERVAL = 4;  // seconds between number calls
-const MAX_CARDS_PER_USER = 5;
+const MAX_CARDS_PER_USER = Infinity;
 // ─── Dynamic settings (loaded from DB, updated via /setstake) ─────────────────
 let STAKE = 10;
 let PRIZE_PER_CARD = 8;  // STAKE - OWNER_CUT
